@@ -5,9 +5,13 @@ using Uno.UI;
 using Windows.UI;
 
 #if __SKIA__
+using System;
+using System.Collections.Generic;
+using Microsoft.UI.Composition.Interactions;
 using Uno.UI.Composition;
 using Uno.UI.Helpers;
-using SkiaSharp;
+using Uno.UI.Composition.Drawing;
+using Windows.Foundation;
 #endif
 
 namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Composition;
@@ -23,9 +27,7 @@ public class Given_Visual_Damage
 	// height) hit this whenever the clip grows.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Ancestor_Clip_Grows_Then_Revealed_Region_Is_Damaged()
 	{
 #if __SKIA__
@@ -77,9 +79,7 @@ public class Given_Visual_Damage
 	// nothing would get the chance to report the damage.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Clip_Shape_Changes_Within_Same_Bounds_Then_It_Is_Damaged()
 	{
 #if __SKIA__
@@ -141,9 +141,7 @@ public class Given_Visual_Damage
 	// vacated pixels stale.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Visual_Stops_Moving_Then_Damage_Falls_Silent()
 	{
 #if __SKIA__
@@ -184,7 +182,7 @@ public class Given_Visual_Damage
 
 			// The two positions overlap here, and overlapping contributions are appended to one path under the
 			// nonzero fill rule — a wrong contour direction would cancel them into a hole Bounds cannot see.
-			Assert.IsTrue(moving.Contains(50, y), $"The overlap of the two positions is a hole (damage bounds: {moving.Bounds}).");
+			Assert.IsTrue(moving.FillContains(new Vector2(50, y)), $"The overlap of the two positions is a hole (damage bounds: {moving.Bounds}).");
 		}
 
 		// Scrolling stopped. Nothing moves, so no frame from here on may report anything — and the region is
@@ -201,14 +199,70 @@ public class Given_Visual_Damage
 #endif
 	}
 
+	// A RedirectVisual paints its Source's whole subtree at its own location, but the Source visual itself is
+	// typically a non-painting container (an element visual leaves the painting to its children). If the
+	// redirect reports that it paints nothing, its region is never damaged: the mirrored content shows up
+	// only on a full repaint (a window resize) and never follows the source afterwards.
+	[TestMethod]
+	[RunsOnUIThread]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
+	[GitHubWorkItem("https://github.com/unoplatform/uno/issues/24193")]
+	public async Task When_RedirectVisual_Repaints_Then_Its_Own_Region_Is_Damaged()
+	{
+#if __SKIA__
+		var compositor = Compositor.GetSharedCompositor();
+
+		var root = compositor.CreateContainerVisual();
+		root.Size = new Vector2(200, 200);
+
+		var source = compositor.CreateContainerVisual();
+		source.Size = new Vector2(50, 50);
+		root.Children.InsertAtTop(source);
+
+		var sourceContent = compositor.CreateSpriteVisual();
+		sourceContent.Brush = compositor.CreateColorBrush(Colors.Magenta);
+		sourceContent.Size = new Vector2(50, 50);
+		source.Children.InsertAtTop(sourceContent);
+
+		var redirect = compositor.CreateRedirectVisual(source);
+		redirect.Size = new Vector2(50, 50);
+		redirect.Offset = new Vector3(100, 0, 0);
+		root.Children.InsertAtTop(redirect);
+
+		using var damage = new DamageRegion();
+		RenderFrame(root, damage);
+
+		// Nothing in the scene changed, but a RedirectVisual repaints on every frame, so the region it
+		// mirrors into must be reported every frame too.
+		damage.Reset();
+		RenderFrame(root, damage);
+
+		using var reported = SnapshotDamage(damage);
+
+		Assert.IsFalse(
+			reported.IsEmpty,
+			"A RedirectVisual reported no damage, so the region it mirrors into would keep the previous frame's pixels.");
+
+		Assert.IsTrue(
+			reported.Bounds.Left <= 102 && reported.Bounds.Right >= 148,
+			$"Damage does not cover the redirect's own region at x=100..150 (damage bounds: {reported.Bounds}).");
+
+		// Falling back to the whole surface would satisfy the assertion above while defeating partial
+		// repaint, so bound the reported region to the mirrored content plus antialiasing slack.
+		Assert.IsTrue(
+			reported.Bounds.Left >= 90 && reported.Bounds.Right <= 160,
+			$"Damage is far wider than the mirrored content, partial repaint is being defeated (damage bounds: {reported.Bounds}).");
+#else
+		await Task.CompletedTask;
+#endif
+	}
+
 	// BorderVisual is the visual that the moved-visual fast path actually applies to: it has an exact content
 	// path (so it would otherwise take the expensive branch) and guarantees it paints within its Size (so the
 	// cheap branch is allowed to answer for it). Moving it must still damage both positions in full.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Visual_With_Content_Path_Moves_Then_Both_Positions_Are_Damaged()
 	{
 #if __SKIA__
@@ -242,8 +296,8 @@ public class Given_Visual_Damage
 
 		// Interiors, not just the bounding box: contributions are appended to one path under the nonzero fill
 		// rule, so a wrong contour direction would union into a hole that Bounds cannot see.
-		Assert.IsTrue(moved.Contains(50, 25), $"The vacated region has a hole (damage bounds: {moved.Bounds}).");
-		Assert.IsTrue(moved.Contains(50, 125), $"The new region has a hole (damage bounds: {moved.Bounds}).");
+		Assert.IsTrue(moved.FillContains(new Vector2(50, 25)), $"The vacated region has a hole (damage bounds: {moved.Bounds}).");
+		Assert.IsTrue(moved.FillContains(new Vector2(50, 125)), $"The new region has a hole (damage bounds: {moved.Bounds}).");
 
 		// Still a partial repaint, not the whole surface.
 		Assert.IsTrue(
@@ -259,9 +313,7 @@ public class Given_Visual_Damage
 	// progress ring, a caret — must not have the two merged, or everything between them repaints as well.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Damage_Is_Far_Apart_Then_It_Is_Not_Merged()
 	{
 #if __SKIA__
@@ -270,18 +322,18 @@ public class Given_Visual_Damage
 		// A scroll port's worth of overlapping contributions, as a moved subtree produces.
 		for (var y = 0f; y < 200; y += 10)
 		{
-			damage.UnionRect(new SKRect(0, y, 100, y + 20));
+			damage.UnionRect(new Rect(0, y, 100, 20));
 		}
 
 		// Something small animating in the opposite corner.
-		damage.UnionRect(new SKRect(900, 900, 920, 920));
+		damage.UnionRect(new Rect(900, 900, 20, 20));
 
 		using var reported = SnapshotDamage(damage, frameSize: 1000);
 
-		Assert.IsTrue(reported.Contains(50, 100), $"The scroll port is not damaged (damage bounds: {reported.Bounds}).");
-		Assert.IsTrue(reported.Contains(910, 910), $"The far region is not damaged (damage bounds: {reported.Bounds}).");
+		Assert.IsTrue(reported.FillContains(new Vector2(50, 100)), $"The scroll port is not damaged (damage bounds: {reported.Bounds}).");
+		Assert.IsTrue(reported.FillContains(new Vector2(910, 910)), $"The far region is not damaged (damage bounds: {reported.Bounds}).");
 		Assert.IsFalse(
-			reported.Contains(500, 500),
+			reported.FillContains(new Vector2(500, 500)),
 			$"The empty space between the two regions was damaged, so they were merged into one box (damage bounds: {reported.Bounds}).");
 #else
 		await Task.CompletedTask;
@@ -293,9 +345,7 @@ public class Given_Visual_Damage
 	// reported region has to cover what is painted without being widened to the whole visual or to the clip.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Shape_Visual_Moves_Then_Damage_Covers_Its_Shapes()
 	{
 #if __SKIA__
@@ -330,8 +380,8 @@ public class Given_Visual_Damage
 		using var reported = SnapshotDamage(damage);
 
 		// The shape sits at (20,10)-(80,40) locally, so its centre is (50,25) before the move and (50,125) after.
-		Assert.IsTrue(reported.Contains(50, 25), $"The vacated shape is not covered (damage bounds: {reported.Bounds}).");
-		Assert.IsTrue(reported.Contains(50, 125), $"The moved shape is not covered (damage bounds: {reported.Bounds}).");
+		Assert.IsTrue(reported.FillContains(new Vector2(50, 25)), $"The vacated shape is not covered (damage bounds: {reported.Bounds}).");
+		Assert.IsTrue(reported.FillContains(new Vector2(50, 125)), $"The moved shape is not covered (damage bounds: {reported.Bounds}).");
 
 		// Falling back to the visual's Size, or worse to the clip, would reach well past the shape's 80px right edge.
 		Assert.IsTrue(
@@ -348,9 +398,7 @@ public class Given_Visual_Damage
 	// survive it.
 	[TestMethod]
 	[RunsOnUIThread]
-#if !__SKIA__
-	[Ignore("Damage-region rendering is specific to the Skia compositor.")]
-#endif
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
 	public async Task When_Many_Visuals_Move_Then_Collapsed_Damage_Is_A_Superset()
 	{
 #if __SKIA__
@@ -389,10 +437,10 @@ public class Given_Visual_Damage
 		{
 			var centre = i * ItemHeight + ItemHeight / 2;
 			Assert.IsTrue(
-				reported.Contains(50, centre),
+				reported.FillContains(new Vector2(50, centre)),
 				$"Item {i} vacated y={centre}, which is not covered (damage bounds: {reported.Bounds}).");
 			Assert.IsTrue(
-				reported.Contains(50, centre + Delta),
+				reported.FillContains(new Vector2(50, centre + Delta)),
 				$"Item {i} moved to y={centre + Delta}, which is not covered (damage bounds: {reported.Bounds}).");
 		}
 
@@ -405,20 +453,138 @@ public class Given_Visual_Damage
 #endif
 	}
 
+	// Hiding a visual takes its whole subtree off the frame, but the render walk never enters a hidden subtree, so
+	// the area its descendants painted is repainted only if hiding reports it. A container paints nothing itself,
+	// so its own last-rendered bounds can't stand in for its children's.
+	[TestMethod]
+	[RunsOnUIThread]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
+	public async Task When_Container_Is_Hidden_Then_Its_Descendants_Are_Damaged()
+	{
+#if __SKIA__
+		var compositor = Compositor.GetSharedCompositor();
+
+		var root = compositor.CreateContainerVisual();
+		root.Size = new Vector2(200, 200);
+
+		var target = new DamageRecorder();
+		root.CompositionTarget = target;
+
+		var container = compositor.CreateContainerVisual();
+		container.Size = new Vector2(200, 200);
+		root.Children.InsertAtTop(container);
+
+		var child = compositor.CreateSpriteVisual();
+		child.Brush = compositor.CreateColorBrush(Colors.Magenta);
+		child.Size = new Vector2(50, 50);
+		child.Offset = new Vector3(100, 100, 0);
+		container.Children.InsertAtTop(child);
+
+		using var damage = new DamageRegion();
+		RenderFrame(root, damage);
+		damage.Reset();
+
+		container.IsVisible = false;
+		RenderFrame(root, damage);
+
+		// Hiding may report straight to the target or through the next frame's walk; either repaints the area.
+		using var reported = SnapshotDamage(damage);
+		Assert.IsTrue(
+			target.Damage.Exists(r => r.Contains(new Point(125, 125))) || reported.FillContains(new Vector2(125, 125)),
+			"Hiding a container reported no damage for its child, so the child's pixels would stay on screen.");
+#else
+		await Task.CompletedTask;
+#endif
+	}
+
+	// A visual that repaints every frame changes without raising any of the flags that invalidate a cached children
+	// picture. Once its subtree is stable long enough to be collapsed into one, it would no longer be walked: frozen
+	// on screen and never damaged again. Painting it has to keep its ancestors from collapsing.
+	[TestMethod]
+	[RunsOnUIThread]
+	[PlatformCondition(ConditionMode.Include, RuntimeTestPlatforms.Skia)]
+	public async Task When_Live_Visual_Is_In_A_Stable_Subtree_Then_It_Keeps_Reporting_Damage()
+	{
+#if __SKIA__
+		var compositor = Compositor.GetSharedCompositor();
+
+		var root = compositor.CreateContainerVisual();
+		root.Size = new Vector2(200, 200);
+
+		var source = compositor.CreateSpriteVisual();
+		source.Brush = compositor.CreateColorBrush(Colors.Magenta);
+		source.Size = new Vector2(10, 10);
+		root.Children.InsertAtTop(source);
+
+		// Enough static visuals that the subtree qualifies for collapsing once it has been stable long enough.
+		for (var i = 0; i < Visual.PictureCollapsingOptimizationVisualCountThreshold; i++)
+		{
+			var filler = compositor.CreateSpriteVisual();
+			filler.Brush = compositor.CreateColorBrush(Colors.Magenta);
+			filler.Size = new Vector2(1, 1);
+			root.Children.InsertAtTop(filler);
+		}
+
+		// A RedirectVisual repaints on every frame.
+		var redirect = compositor.CreateRedirectVisual(source);
+		redirect.Size = new Vector2(10, 10);
+		redirect.Offset = new Vector3(150, 150, 0);
+		root.Children.InsertAtTop(redirect);
+
+		using var damage = new DamageRegion();
+		for (var frame = 0; frame <= Visual.PictureCollapsingOptimizationFrameThreshold + 5; frame++)
+		{
+			damage.Reset();
+			RenderFrame(root, damage);
+		}
+
+		using var reported = SnapshotDamage(damage);
+		Assert.IsTrue(
+			reported.FillContains(new Vector2(155, 155)),
+			$"The live visual stopped reporting damage once its subtree was stable (damage bounds: {reported.Bounds}).");
+#else
+		await Task.CompletedTask;
+#endif
+	}
+
 #if __SKIA__
 	private static void RenderFrame(ContainerVisual root, DamageRegion damage)
 	{
-		var (picture, _, _) = SkiaRenderHelper.RecordPictureAndReturnPath(200, 200, root, invertPath: false, damage: damage);
-		picture.Dispose();
+		var recording = DrawingFactory.Current.CreateRecording();
+		FrameRenderHelper.RecordFrame(recording, 200, 200, root, invertPath: false, damage: damage);
+		recording.Finish()?.Dispose();
 	}
 
-	// The region keeps rect and exact-path contributions apart; snapshotting materialises them into the
-	// single path the frame is actually clipped to, which is what these assertions inspect.
-	private static SKPath SnapshotDamage(DamageRegion damage, float frameSize = 200)
+	// The region accumulates rects; detaching materialises them into the single geometry the frame is
+	// actually clipped to, which is what these assertions inspect.
+	private static IGeometry SnapshotDamage(DamageRegion damage, float frameSize = 200)
 	{
-		var path = new SKPath();
-		damage.SnapshotAndReset(path, new SKRect(0, 0, frameSize, frameSize));
-		return path;
+		damage.ClampTo(new Rect(0, 0, frameSize, frameSize));
+		return damage.Detach(1f) ?? GeometryFactory.Current.CreateRectangleGeometry(default);
+	}
+
+	private sealed class DamageRecorder : ICompositionTarget
+	{
+		public List<Rect> Damage { get; } = new();
+
+		public double RasterizationScale => 1;
+
+		// No recording happens through this double; the process default is the right fallback.
+		public IDrawingFactory Renderer => null;
+
+		public event EventHandler RasterizationScaleChanged
+		{
+			add { }
+			remove { }
+		}
+
+		public void RequestNewFrame() { }
+
+		public void AddDamage(Rect bounds) => Damage.Add(bounds);
+
+		public void AddDamage(IGeometry region) => Damage.Add(region.Bounds);
+
+		public void TryRedirectForManipulation(Microsoft.UI.Input.PointerPoint pointerPoint, InteractionTracker tracker) { }
 	}
 #endif
 }

@@ -1,4 +1,4 @@
-﻿#if (__SKIA__ || __WASM__) && HAS_UNO
+﻿#if __SKIA__ && HAS_UNO
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -19,30 +19,6 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml;
 [TestClass]
 public class Given_BrowserHtmlElement
 {
-#if __WASM__
-	[TestMethod]
-	public async Task Given_HasParent()
-	{
-		var owner = new ContentControl() { Width = 100, Height = 100 };
-		var root = new Border()
-		{
-			Child = owner,
-			Width = 100,
-			Height = 100,
-			Background = new SolidColorBrush(Colors.Red),
-			Padding = new Microsoft.UI.Xaml.Thickness(10)
-		};
-		var SUT = BrowserHtmlElement.CreateHtmlElement("div");
-		owner.Content = SUT;
-
-		WindowHelper.WindowContent = root;
-
-		await WindowHelper.WaitForLoaded(owner);
-
-		Assert.AreEqual(owner.TemplatedRoot.GetHtmlId(), SUT.ExecuteJavascript($"return element.parentElement.id"));
-	}
-#endif
-
 	[TestMethod]
 	public async Task Given_SetAttribute()
 	{
@@ -173,6 +149,48 @@ public class Given_BrowserHtmlElement
 		Assert.AreEqual("all", SUT.ExecuteJavascript($"return element.style.pointerEvents"));
 		Assert.AreEqual("none", SUT.ExecuteJavascript($"return element.style.borderStyle"));
 	}
+
+#if __SKIA__
+	[TestMethod]
+	public async Task When_New_Host_Attaches_Before_Old_Host_Detaches()
+	{
+		if (!OperatingSystem.IsBrowser())
+		{
+			Assert.Inconclusive("This test is only supported on the browser.");
+		}
+
+		// When an element is recycled, the new host can attach before the old one detaches. The old
+		// host's detach must then leave the element alone: hiding it would blank the new host.
+		var SUT = BrowserHtmlElement.CreateHtmlElement("div");
+		var oldHost = new ContentControl { Width = 100, Height = 100, Content = SUT };
+		var newHost = new ContentControl { Width = 100, Height = 100, Content = "placeholder" };
+		var root = new StackPanel();
+		root.Children.Add(oldHost);
+		root.Children.Add(newHost);
+
+		try
+		{
+			WindowHelper.WindowContent = root;
+			await WindowHelper.WaitForLoaded(oldHost);
+			await WindowHelper.WaitForLoaded(newHost);
+			Assert.AreEqual("false", SUT.ExecuteJavascript("return element.hidden.toString()"));
+
+			newHost.Content = SUT;
+			await WindowHelper.WaitForIdle();
+			oldHost.Content = null;
+			await WindowHelper.WaitForIdle();
+
+			Assert.AreEqual(
+				"false",
+				SUT.ExecuteJavascript("return element.hidden.toString()"),
+				"The old host's detach must not hide an element the new host already attached.");
+		}
+		finally
+		{
+			WindowHelper.WindowContent = null;
+		}
+	}
+#endif
 
 	[TestMethod]
 	public async Task Given_HtmlEvent()

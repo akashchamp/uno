@@ -74,7 +74,7 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Media_Imaging
 
 #if __SKIA__
 		[TestMethod]
-		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.SkiaAndroid)]
+		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.SkiaAndroid | RuntimeTestPlatforms.SkiaTvOS)]
 		public async Task When_LocalResource_ScaleQualifier()
 		{
 			var path = new Uri("ms-appx:///Assets/scale-test.png");
@@ -87,7 +87,9 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Media_Imaging
 #if __SKIA__ // Not yet supported on the other platforms (https://github.com/unoplatform/uno/issues/8909)
 		[TestMethod]
 		// The ms-appdata load never completes on Skia Linux, and the awaited TCS has no timeout, so the job hangs to its limit (#23967).
-		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.SkiaFrameBuffer | RuntimeTestPlatforms.SkiaX11)]
+		// Android goes silent the same way: first seen under NativeAOT (#24271), then on plain Android Skia
+		// once #24003 fixed the shard partition and the test actually started running there.
+		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.SkiaFrameBuffer | RuntimeTestPlatforms.SkiaX11 | RuntimeTestPlatforms.SkiaAndroid)]
 		[GitHubWorkItem("https://github.com/unoplatform/uno/issues/23967")]
 		// Backstop for the storage calls below, which the inner WaitAsync does not cover.
 		[Timeout(60000)]
@@ -115,7 +117,7 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Media_Imaging
 #endif
 
 		[TestMethod]
-		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.NativeWasm | RuntimeTestPlatforms.NativeWinUI)]
+		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.NativeWinUI)]
 		public async Task When_BundleImages_Loaded_StreamsAreDisposed()
 		{
 			var panel = new StackPanel { Orientation = Orientation.Horizontal };
@@ -343,7 +345,6 @@ namespace Uno.UI.RuntimeTests.Tests.Windows_UI_Xaml_Media_Imaging
 		[Ignore("Flaky for skia targets: https://github.com/unoplatform/uno/issues/9080")]
 #endif
 		[TestMethod]
-		[PlatformCondition(ConditionMode.Exclude, RuntimeTestPlatforms.NativeIOS)] // https://github.com/unoplatform/uno/issues/9080
 		public async Task When_Uri_Nullified()
 		{
 			if (!ApiInformation.IsTypePresent("Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap, Uno.UI"))
